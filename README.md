@@ -6,6 +6,8 @@ Android + Windows + MCP 跨设备个人上下文记忆助手。**v0.4.0** 支持
 
 ## 运行与安装
 
+Windows 可选的连续环境录音见 [环境录音说明](docs/ambient-audio.md)：托盘暂停/恢复、本机 FLAC 分段、异常重连和空间保护。需要在本机单独配置启用；不上传录音、不启动转写。
+
 需要 Node.js 22.15+、pnpm；Android 构建需要 JDK 17+ 和 Android SDK 35/build-tools 35.0.0。
 
 ```powershell
@@ -34,7 +36,7 @@ Personal memory for Android, Windows, Codex, and other MCP clients such as DeepS
 | Windows context (0.3) | Foreground app/window titles and exposed non-editable visible labels | Enable desktop capture; hidden 5-second sampler with bounded reads |
 | MCP/manual API | Content explicitly sent through memory tools or authenticated API | Connect an authorized client |
 
-Accessibility collection depends on what each app exposes to Android. It is not a complete log of every action or message. Custom-rendered views, image/video content, private databases, hidden history, and inaccessible UI may be absent. There is no screenshot/OCR collection, raw keyboard capture, editable-field text capture, or background microphone recording. Text already rendered as a normal message may be captured after sending if the app exposes it.
+Accessibility collection depends on what each app exposes to Android. It is not a complete log of every action or message. Custom-rendered views, image/video content, private databases, hidden history, and inaccessible UI may be absent. There is no screenshot/OCR collection, raw keyboard capture or editable-field text capture. Android does not record background microphone audio; Windows has a separate, explicitly enabled [ambient audio recorder](docs/ambient-audio.md). Text already rendered as a normal message may be captured after sending if the app exposes it.
 
 ## Consent, filters, and pause
 

@@ -1,0 +1,16 @@
+{
+  "enabled": false,
+  "nodePath": "node.exe",
+  "ffmpegPath": "ffmpeg.exe",
+  "device": "REPLACE_WITH_MICROPHONE_NAME",
+  "outputDir": "C:/PersonalMemoryData/audio-cache",
+  "segmentSeconds": 60,
+  "minFreeBytes": 10737418240,
+  "transcription": {
+    "enabled": true,
+    "pythonPath": "python.exe",
+    "modelPath": "C:/Models/faster-whisper-small",
+    "language": "zh",
+    "outputDir": "C:/PersonalMemoryData/transcripts"
+  }
+}

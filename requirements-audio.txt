@@ -1,0 +1,2 @@
+# Optional offline transcription worker; use a separately managed Python environment.
+faster-whisper==1.2.1

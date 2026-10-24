@@ -31,3 +31,27 @@ memory/
 *.log
 *.tmp
 .DS_Store
+
+# Ambient capture: real settings, private recordings/transcripts and model caches.
+ambient-audio.config.json
+ambient-audio.config.json.*
+**/recordings/
+**/audio-cache/
+**/transcripts/
+**/models/
+**/.cache/
+*.capture.wav
+*.wav
+*.flac
+*.opus
+*.mp3
+*.m4a
+*.pcm
+*.srt
+*.vtt
+*.before-*
+*.previous-*
+**/skillmemory/
+**/环境语音转写/
+**/PersonalMemory Transcripts/
+**/PersonalMemory Recordings/

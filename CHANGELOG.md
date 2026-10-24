@@ -1,5 +1,13 @@
 # Release notes
 
+## Unreleased — 2026-10-24
+
+- Added opt-in Windows microphone capture managed by the existing tray, with continuous segmentation, pause/resume, input recovery and low-disk protection.
+- Added offline transcript-only retention using an existing local faster-whisper model. Timestamped segment JSON and daily text are verified on disk before deleting each audio input; failed jobs retain their audio for retry.
+- Kept speech recognition separate from capture so long jobs do not block microphone pause and recovery. CPU transcription uses two threads and background priority; no audio upload or automatic model download is performed.
+- Added an inactive generic configuration example, optional Python requirements, retention tests and ignore rules for runtime settings, audio, transcripts and model caches.
+- Windows-only source update. The existing Android version and packaged APK are unchanged. Real conference calls and a full 24-hour soak remain outside the automated test coverage.
+
 ## v0.4.0 — 2026-10-01
 
 - Added an HTTPS upload-only gateway for Android-to-Windows synchronization across networks without an additional Android VPN or Microsoft app authorization. HTTPS routing must be configured by the operator; Windows must remain awake and connected.
