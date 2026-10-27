@@ -69,6 +69,10 @@ class Transcriber:
                  'backend': self.settings.get('backend', 'faster-whisper'),
                  'computeType': self.compute, 'gpuFallbackReason': self.fallback}
         value.update(extra)
+        if self.settings.get('backend') == 'qwen3-asr' and self.model:
+            value.update(contextStatus=getattr(self.model, 'context_status', 'unknown'),
+                         contextTerms=getattr(self.model, 'context_term_count', 0),
+                         contextSha256=getattr(self.model, 'context_sha256', None))
         self.health(value)
 
     def load(self, device):
@@ -79,9 +83,14 @@ class Transcriber:
             compute = 'float16' if device == 'cuda' else 'float32'
         else:
             compute = self.settings.get('computeType', 'int8_float16') if device == 'cuda' else 'int8'
-        model = self.factory(self.settings['modelPath'], device=device, compute_type=compute,
-                             cpu_threads=int(self.settings.get('cpuThreads', 2)),
-                             num_workers=1, local_files_only=True)
+        options = dict(device=device, compute_type=compute,
+                       cpu_threads=int(self.settings.get('cpuThreads', 2)),
+                       num_workers=1, local_files_only=True)
+        if qwen:
+            options.update(context_file=self.settings.get('contextFile'), context=self.settings.get('context', ''),
+                           merge_gap_seconds=self.settings.get('mergeGapSeconds', 1.0),
+                           max_speech_seconds=self.settings.get('maxSpeechSeconds', 30.0))
+        model = self.factory(self.settings['modelPath'], **options)
         self.model, self.device, self.compute = model, device, compute
 
     def use_cpu(self, error):

@@ -38,6 +38,8 @@ memory/
 # Ambient capture: real settings, private recordings/transcripts and model caches.
 ambient-audio.config.json
 ambient-audio.config.json.*
+asr-context.json
+asr-context.json.*
 **/recordings/
 **/audio-cache/
 **/transcripts/
