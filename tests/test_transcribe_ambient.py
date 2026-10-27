@@ -81,6 +81,7 @@ class RecoveryTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             engine.transcribe('audio')
         self.assertEqual(states[-1]['status'], 'error')
+        self.assertEqual(states[-1]['modelPath'], 'local-model')
         self.assertEqual(engine.device, 'cuda')
 
 

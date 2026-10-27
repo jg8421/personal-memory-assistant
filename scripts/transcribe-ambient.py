@@ -63,6 +63,7 @@ class Transcriber:
     def report(self, **extra):
         value = {'pid': os.getpid(), 'checkedAt': datetime.now(timezone.utc).isoformat(),
                  'requestedDevice': self.preferred, 'device': self.device,
+                 'modelPath': self.settings['modelPath'],
                  'computeType': self.compute, 'gpuFallbackReason': self.fallback}
         value.update(extra)
         self.health(value)
