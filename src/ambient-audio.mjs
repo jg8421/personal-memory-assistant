@@ -132,8 +132,11 @@ export class AmbientAudio {
           fs.unlinkSync(file);
           this.transcriptionFailures.delete(file);
           atomicJson(this.transcriptionRetryPath,{version:1,files:Object.fromEntries(this.transcriptionFailures)});
-          this.write({transcriptionStatus:'ready',lastTranscript:saved.daily,lastTranscribedAt:new Date().toISOString(),
-            transcriptionError:'',transcribingFile:'',audioRetention:'delete-after-transcript',
+          const processedAt=new Date().toISOString();
+          this.write({transcriptionStatus:'ready',lastProcessedAt:processedAt,
+            lastProcessingResult:saved.skipped?'no-recognized-speech':'transcribed',
+            ...(saved.skipped ? {lastSkippedAt:processedAt} : {lastTranscript:saved.daily,lastTranscribedAt:processedAt}),
+            transcriptionError:'',transcribingFile:'',audioRetention:'delete-after-transcript-or-silence-receipt',
             deferredTranscriptionFiles:this.transcriptionFailures.size,
             transcriptionWarning:this.transcriptionFailures.size ? '部分片段失败暂存，后续片段继续转写' : '',
             pendingAudioFiles:pending.filter(p=>fs.existsSync(p)).length});

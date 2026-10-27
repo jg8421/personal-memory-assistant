@@ -3,13 +3,14 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import {saveTranscript} from '../src/ambient-transcription.mjs';
+import {saveTranscript,rebuildDailyTranscript} from '../src/ambient-transcription.mjs';
 import {AmbientAudio,audioArgs} from '../src/ambient-audio.mjs';
 
 function fixture(){const home=fs.mkdtempSync(path.join(os.tmpdir(),'ambient-text-'));const outputDir=path.join(home,'audio');
  const day=path.join(outputDir,'2026-10-24');fs.mkdirSync(day,{recursive:true});fs.mkdirSync(path.join(home,'state'));
  const input=path.join(day,'12-34-56-test.capture.wav');fs.writeFileSync(input,'audio');
- return {home,input,config:{outputDir,transcription:{enabled:true,outputDir:path.join(home,'transcripts')}}};}
+ return {home,input,config:{outputDir,transcription:{enabled:true,outputDir:path.join(home,'transcripts'),
+  silenceReceiptDir:path.join(home,'state','ambient-silence')}}};}
 
 test('audio is removed only after timestamped daily transcript has been saved and read back',async()=>{
  const f=fixture();try{
@@ -26,11 +27,55 @@ test('failed transcription preserves the original audio and exposes an error',as
  await audio.finalizeFiles();assert.ok(fs.existsSync(f.input));assert.equal(audio.state.transcriptionStatus,'error');
  }finally{fs.rmSync(f.home,{recursive:true,force:true});}
 });
-test('invalid receipts cannot authorize removing audio; silence is explicitly represented',()=>{
+test('invalid receipts cannot authorize removing audio; silence only writes a local receipt',()=>{
  const f=fixture();try{
  assert.throws(()=>saveTranscript(f.input,{ok:true,segments:[]},f.config.transcription));assert.ok(fs.existsSync(f.input));
  const saved=saveTranscript(f.input,{ok:true,duration:60,segments:[]},f.config.transcription);
- assert.ok(fs.readFileSync(saved.daily,'utf8').includes('未检测到可识别人声'));assert.ok(fs.existsSync(f.input));
+ assert.equal(saved.daily,null);assert.equal(saved.skipped,true);
+ assert.equal(fs.existsSync(f.config.transcription.outputDir),false);
+ assert.equal(JSON.parse(fs.readFileSync(saved.receipt,'utf8')).result,'no-recognized-speech');
+ assert.ok(fs.existsSync(f.input));
+ }finally{fs.rmSync(f.home,{recursive:true,force:true});}
+});
+
+test('silence leaves an existing daily document untouched and does not replace the last speech status',async()=>{
+ const f=fixture();try{
+ const spoken=saveTranscript(f.input,{ok:true,duration:60,segments:[{start:0,end:2,text:'保留原文'}]},f.config.transcription);
+ const previous=fs.readFileSync(spoken.daily);fs.utimesSync(spoken.daily,new Date(1000),new Date(1000));
+ const silence=path.join(path.dirname(f.input),'12-35-56-silent.capture.wav');fs.writeFileSync(silence,'audio');
+ fs.unlinkSync(f.input);
+ const audio=new AmbientAudio(f.home);audio.config=f.config;
+ audio.state.lastTranscript=spoken.daily;audio.state.lastTranscribedAt='previous-speech';
+ audio.transcriber={transcribe:async input=>saveTranscript(input,{ok:true,duration:60,segments:[{start:0,end:1,text:'  '}]},f.config.transcription)};
+ await audio.finalizeFiles();
+ assert.equal(fs.existsSync(silence),false);assert.deepEqual(fs.readFileSync(spoken.daily),previous);
+ assert.equal(fs.statSync(spoken.daily).mtimeMs,1000);
+ assert.equal(audio.state.lastTranscribedAt,'previous-speech');assert.equal(audio.state.lastTranscript,spoken.daily);
+ assert.equal(audio.state.lastProcessingResult,'no-recognized-speech');assert.ok(audio.state.lastProcessedAt);
+ assert.equal(fs.readdirSync(path.dirname(spoken.receipt)).length,1);
+ }finally{fs.rmSync(f.home,{recursive:true,force:true});}
+});
+
+test('failure to persist a local silence receipt preserves the audio',async()=>{
+ const f=fixture();try{
+ fs.writeFileSync(f.config.transcription.silenceReceiptDir,'blocks directory');
+ const audio=new AmbientAudio(f.home);audio.config=f.config;
+ audio.transcriber={transcribe:async input=>saveTranscript(input,{ok:true,duration:60,segments:[]},f.config.transcription)};
+ await audio.finalizeFiles();assert.ok(fs.existsSync(f.input));assert.equal(audio.state.transcriptionStatus,'error');
+ }finally{fs.rmSync(f.home,{recursive:true,force:true});}
+});
+
+test('daily rebuild removes old silent placeholders while preserving all spoken records',()=>{
+ const f=fixture();try{
+ const options=f.config.transcription;const day='2026-10-24';const folder=path.join(options.outputDir,day);
+ fs.mkdirSync(folder,{recursive:true});
+ fs.writeFileSync(path.join(folder,'12-00-00-old.json'),JSON.stringify({startedAt:'12:00:00',durationSeconds:60,segments:[]}));
+ const daily=path.join(options.outputDir,day+'.txt');fs.writeFileSync(daily,'old silent placeholders');
+ assert.equal(rebuildDailyTranscript(options,day),null);assert.equal(fs.existsSync(daily),false);
+ assert.ok(fs.existsSync(path.join(folder,'12-00-00-old.json')));
+ saveTranscript(f.input,{ok:true,duration:60,segments:[{start:0,end:2,text:'完整保留'}]},options);
+ const text=fs.readFileSync(daily,'utf8');assert.ok(text.includes('完整保留'));assert.ok(!text.includes('12:00:00'));
+ assert.ok(!text.includes('未检测到可识别人声'));
  }finally{fs.rmSync(f.home,{recursive:true,force:true});}
 });
 test('transcription mode uses small 16kHz capture buffers without silence deletion',()=>{
