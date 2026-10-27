@@ -21,7 +21,7 @@
 在音频配置中设置 `transcription: {enabled: true, pythonPath: "本机Python", modelPath: "已下载的faster-whisper模型目录", language: "zh", outputDir: "本机转写目录"}`，将 `segmentSeconds` 改为60。
 
 - 以16kHz单声道采集，每分钟临时WAV约1.92MB；同一采集进程连续分段。
-- 使用本地faster-whisper small，CPU int8、2线程、低优先级，强制离线，不自动下载模型或传音频到云端。
+- 使用本地faster-whisper small，默认CPU int8、2线程；可配置NVIDIA GPU优先。工作进程低优先级、强制离线，不自动下载模型或传音频到云端。
 - 人声识别后保存逐段JSON和每日TXT，带时间戳。文件落盘并读回成功后才删除对应音频；已有FLAC也按相同步骤处理。
 - 转写失败保留音频缓存并重试，不把失败当作静音或成功。ASR与麦克风采集分开运行，暂停采集不等待ASR结束。
 - 失败按文件持久化退避，不阻塞后续片段；文件内容变化后可提前重试。积压时每分钟优先处理一个最近闭合片段，同时顺序补转旧片段。重试状态保存在本机 `state/ambient-transcription-retries.json`，原始音频仅在文字保存读回成功后删除。
@@ -31,3 +31,13 @@
 在独立Python环境中安装可选的 `requirements-audio.txt`；模型需由使用者事先准备在本机，工作进程只读取明确配置的本地模型目录。源码不包含模型、运行环境、录音、转写或实际保存路径。
 
 转写的 `outputDir` 可以指向使用者自己的同步目录。此时文字会由使用者配置的同步客户端处理，原始音频缓存和模型仍应留在独立的本机路径。本地写入成功不代表云端到达；更换输出目录后需重新加载转写进程，或由操作方自行管理兼容路径。当前只录麦克风，不包含耳机内的系统播放音轨；独占设备模式可能与会议软件冲突。
+
+## 可选：NVIDIA GPU优先转写
+
+在 `transcription` 中设置 `device: "cuda"`、`computeType: "int8_float16"`、`fallbackToCpu: true`、`gpuRetrySeconds: 300`。未指定设备的旧配置仍使用CPU；`auto`同样表示先尝试GPU，再按配置回退。模型和转写路径不变，GPU仅负责本机计算。
+
+Windows需要适合所装CTranslate2版本的CUDA/cuBLAS及cuDNN运行库。目前CTranslate2 4.8系列配套CUDA 12与cuDNN 9。可在 `cudaLibraryDirs` 中列出本机库目录；只向工作进程添加搜索路径，不改系统PATH。也会检查 `CUDA_PATH/bin` 与安装目录的 `runtime/cuda-python/nvidia/cudnn/bin`。运行库、驱动和模型不得提交仓库。
+
+GPU初始化失败或可捕获的CUDA推理错误会回退CPU INT8，并对当前片段重试；随后每5分钟在下一个任务开始时重新尝试GPU。无效音频仍保留在原重试队列，不把它当成GPU故障。状态 `state/ambient-transcriber.json` 标明实际设备、精度、回退原因和耗时；配置写cuda不代表当前一定使用GPU。进程原生崩溃仍由既有守护重启并保留音频，不承诺所有驱动故障均可在Python内回退。
+
+切换前应对同一段有效语音进行CPU/GPU对比，再确认真实GPU进程、新转写落盘和录音连续性；短测不能替代24小时稳定性或准确率评测。GPU速度优势不保证逐字输出与CPU完全相同。

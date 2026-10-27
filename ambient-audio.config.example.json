@@ -11,6 +11,11 @@
     "pythonPath": "python.exe",
     "modelPath": "C:/Models/faster-whisper-small",
     "language": "zh",
+    "device": "cpu",
+    "computeType": "int8_float16",
+    "fallbackToCpu": true,
+    "gpuRetrySeconds": 300,
+    "cudaLibraryDirs": [],
     "outputDir": "C:/PersonalMemoryData/transcripts"
   }
 }
