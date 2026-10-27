@@ -17,5 +17,17 @@
     "gpuRetrySeconds": 300,
     "cudaLibraryDirs": [],
     "outputDir": "C:/PersonalMemoryData/transcripts"
+  },
+  "deviceId": null,
+  "allowDeviceFallback": false,
+  "recordingSampleRate": 16000,
+  "quietHours": {
+    "enabled": false,
+    "start": "02:00",
+    "end": "09:00",
+    "timeZone": "Asia/Shanghai"
+  },
+  "powerPolicy": {
+    "enabled": false
   }
 }

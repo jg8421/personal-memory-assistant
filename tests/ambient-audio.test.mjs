@@ -48,3 +48,17 @@ test('owner exit stops the recorder; day names use local calendar',async()=>{
     assert.equal(audio.closed,true); assert.equal(audio.state.status,'stopped');
   } finally {fs.rmSync(home,{recursive:true,force:true});}
 });
+
+test('Windows sharing conflicts retry the same atomic operation without replacing permissions',()=>{
+ if(process.platform!=='win32')return;
+ const home=fs.mkdtempSync(path.join(os.tmpdir(),'ambient-sharing-'));
+ const target=path.join(home,'state.json');const rename=fs.renameSync;let calls=0;
+ try {
+  fs.writeFileSync(target,'{"old":true}');
+  fs.renameSync=(from,to)=>{calls++;if(calls===1){const error=new Error('shared reader');error.code='EPERM';throw error;}return rename(from,to);};
+  atomicJson(target,{new:true});assert.equal(calls,2);assert.deepEqual(JSON.parse(fs.readFileSync(target,'utf8')),{new:true});
+  fs.renameSync=()=>{calls++;const error=new Error('access denied');error.code='EACCES';throw error;};
+  assert.throws(()=>atomicJson(target,{unwritten:true}),{code:'EACCES'});
+  assert.deepEqual(JSON.parse(fs.readFileSync(target,'utf8')),{new:true});
+ }finally{fs.renameSync=rename;fs.rmSync(home,{recursive:true,force:true});}
+});

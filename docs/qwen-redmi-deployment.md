@@ -9,3 +9,8 @@
 7. 检查连续新片段、GPU真实进程、积压数量和输出路径。配置已保存不等于开机恢复已验收，短测不等于24小时稳定；OneDrive本机写入、云端到达、目标机下载和模型加载分别报告。
 
 Qwen时间戳采用VAD语音区间，不提供逐字对齐。必要时恢复已备份配置及原Python环境/模型，再重载转写；不要删除尚未处理的音频。不要为部署重置无关服务、改变系统代理或暂停其他应用的启动项。
+
+
+## Intel XPU
+
+See [Intel backend selection and measured rollout limits](intel-xpu-validation.md).

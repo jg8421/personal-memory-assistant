@@ -1,4 +1,4 @@
-# Install a compatible CUDA-enabled PyTorch build for the target machine first.
+# Install a device-compatible PyTorch build (CUDA, or experimental Intel XPU) for the target machine first.
 # For mainland China use trusted domestic mirrors and direct network routing.
 qwen-asr==0.0.6
 faster-whisper==1.2.1

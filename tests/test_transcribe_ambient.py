@@ -2,6 +2,11 @@ import importlib.util
 from pathlib import Path
 from types import SimpleNamespace
 import unittest
+import tempfile
+import json
+import io
+import wave
+import numpy as np
 from unittest.mock import patch
 
 spec = importlib.util.spec_from_file_location('ambient_worker', Path(__file__).resolve().parents[1] / 'scripts/transcribe-ambient.py')
@@ -26,6 +31,9 @@ class RecoveryTests(unittest.TestCase):
         self.patch = patch.object(worker, 'prepare_cuda')
         self.patch.start()
         self.addCleanup(self.patch.stop)
+        decoder = patch.object(worker, 'load_audio_file', side_effect=lambda value, path=None: value)
+        decoder.start()
+        self.addCleanup(decoder.stop)
         self.settings = {'device': 'cuda', 'modelPath': 'local-model', 'gpuRetrySeconds': 30}
 
     def test_gpu_initialization_failure_retries_after_cooldown(self):
@@ -95,6 +103,64 @@ class RecoveryTests(unittest.TestCase):
         engine.use_cpu(RuntimeError('CUDA out of memory'))
         self.assertEqual(engine.compute, 'float32')
         self.assertEqual([x['compute_type'] for x in options], ['float16', 'float32'])
+
+
+class StartupPriorityTests(unittest.TestCase):
+    @unittest.skipUnless(worker.os.name == 'nt', 'Windows scheduling order')
+    def test_model_initializes_before_inference_priority_is_lowered(self):
+        events=[]
+        current=lambda:1
+        priority=lambda handle,value:events.append(('priority',value)) or True
+        kernel=SimpleNamespace(GetCurrentProcess=current,SetPriorityClass=priority)
+        def construct(*args,**kwargs):
+            events.append('load')
+            return SimpleNamespace(device='cpu',compute='int8')
+        with tempfile.TemporaryDirectory() as folder:
+            config=Path(folder)/'config.json'
+            config.write_text(json.dumps({'transcription':{'modelPath':'local-model'}}),encoding='utf8')
+            with patch.object(worker,'Transcriber',side_effect=construct), \
+                 patch.object(worker.ctypes,'WinDLL',return_value=kernel), \
+                 patch.dict('sys.modules',{'faster_whisper':SimpleNamespace(WhisperModel=object)}), \
+                 patch.object(worker.sys,'argv',['worker',str(config)]), \
+                 patch.object(worker.sys,'stdin',io.StringIO('')), \
+                 patch.object(worker.sys,'stdout',io.StringIO()):
+                worker.main()
+        self.assertEqual(events,['load',('priority',0x4000)])
+
+
+class CapturedAudioTests(unittest.TestCase):
+    def test_pcm_is_decoded_without_external_decoder_and_original_is_unchanged(self):
+        with tempfile.TemporaryDirectory() as folder:
+            source=Path(folder)/'closed.wav'
+            data=np.tile(np.array([-32768,-1,0,32767],dtype='<i2'),4000)
+            with wave.open(str(source),'wb') as output:
+                output.setparams((1,2,16000,0,'NONE','not compressed'))
+                output.writeframes(data.tobytes())
+            before=source.read_bytes()
+            with patch.object(worker.subprocess,'run') as run:
+                result=worker.load_audio_file(source)
+            run.assert_not_called()
+            np.testing.assert_array_equal(result,data.astype(np.float32)/32768.0)
+            self.assertEqual(source.read_bytes(),before)
+
+    def test_empty_pcm_is_retained_instead_of_becoming_a_success(self):
+        with tempfile.TemporaryDirectory() as folder:
+            source=Path(folder)/'empty.wav'
+            with wave.open(str(source),'wb') as output:output.setparams((1,2,16000,0,'NONE','not compressed'))
+            with self.assertRaisesRegex(ValueError,'original retained'):
+                worker.load_audio_file(source)
+            self.assertTrue(source.exists())
+
+    def test_existing_ffmpeg_fallback_is_hidden_bounded_and_does_not_modify_input(self):
+        with tempfile.TemporaryDirectory() as folder:
+            source=Path(folder)/'other.flac';source.write_bytes(b'non-wav fixture')
+            output=SimpleNamespace(returncode=0,stdout=np.zeros(16000,dtype='<i2').tobytes())
+            with patch.object(worker.subprocess,'run',return_value=output) as run:
+                result=worker.load_audio_file(source,'configured-ffmpeg')
+            self.assertEqual(len(result),16000)
+            self.assertIn('-nostdin',run.call_args.args[0]);self.assertEqual(run.call_args.kwargs['timeout'],120)
+            if worker.os.name=='nt':self.assertEqual(run.call_args.kwargs['creationflags'],worker.subprocess.CREATE_NO_WINDOW)
+            self.assertEqual(source.read_bytes(),b'non-wav fixture')
 
 
 if __name__ == '__main__':

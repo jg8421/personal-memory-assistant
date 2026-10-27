@@ -3,11 +3,14 @@ import os
 os.environ['HF_HUB_OFFLINE'] = '1'
 os.environ['TRANSFORMERS_OFFLINE'] = '1'
 os.environ['OMP_NUM_THREADS'] = '2'
+os.environ['MKL_NUM_THREADS'] = '2'
 import sys
 import json
 import ctypes
 import gc
 import time
+import wave
+import subprocess
 from datetime import datetime, timezone
 from ctypes import wintypes
 from pathlib import Path
@@ -15,6 +18,32 @@ from pathlib import Path
 _dll_handles = []
 _dll_directories = set()
 _cuda_ready = False
+
+
+def load_audio_file(audio, ffmpeg_path=None):
+    """Read captured PCM directly; preserve input and avoid PyAV API drift."""
+    import numpy as np
+    if isinstance(audio, np.ndarray):
+        return audio
+    try:
+        with wave.open(str(audio), 'rb') as source:
+            if (source.getnchannels(), source.getsampwidth(), source.getframerate(), source.getcomptype()) == (1, 2, 16000, 'NONE'):
+                frames = min(source.getnframes(), Path(audio).stat().st_size // 2)
+                data = source.readframes(frames)
+                if not data:
+                    raise ValueError('Empty captured audio; original retained')
+                return np.frombuffer(data, dtype='<i2').astype(np.float32) / 32768.0
+    except (wave.Error, EOFError):
+        pass
+    if not ffmpeg_path:
+        raise ValueError('Non-PCM input requires an existing configured FFmpeg; original retained')
+    options = {'creationflags': subprocess.CREATE_NO_WINDOW} if os.name == 'nt' else {}
+    decoded = subprocess.run([str(ffmpeg_path), '-hide_banner', '-v', 'error', '-nostdin',
+        '-i', str(audio), '-map', '0:a:0', '-ac', '1', '-ar', '16000',
+        '-f', 's16le', 'pipe:1'], capture_output=True, timeout=120, **options)
+    if decoded.returncode or not decoded.stdout:
+        raise ValueError('Audio decode failed; original retained')
+    return np.frombuffer(decoded.stdout, dtype='<i2').astype(np.float32) / 32768.0
 
 
 def prepare_cuda(settings):
@@ -40,7 +69,7 @@ def prepare_cuda(settings):
 
 def gpu_error(error):
     text = str(error).lower()
-    return any(word in text for word in ('cuda', 'cudnn', 'cublas', 'gpu', 'out of memory'))
+    return any(word in text for word in ('cuda', 'cudnn', 'cublas', 'xpu', 'sycl', 'level zero', 'gpu', 'out of memory'))
 
 
 class Transcriber:
@@ -52,8 +81,10 @@ class Transcriber:
         self.preferred = settings.get('device', 'cpu')
         if settings.get('backend', 'faster-whisper') not in ('faster-whisper', 'qwen3-asr'):
             raise ValueError('Unknown offline transcription backend')
-        if self.preferred not in ('cpu', 'cuda', 'auto'):
-            raise ValueError('transcription.device must be cpu, cuda or auto')
+        if self.preferred not in ('cpu', 'cuda', 'xpu', 'auto'):
+            raise ValueError('transcription.device must be cpu, cuda, xpu or auto')
+        if self.preferred == 'xpu' and settings.get('backend') != 'qwen3-asr':
+            raise ValueError('Intel XPU requires the qwen3-asr backend')
         self.model = None
         self.device = None
         self.compute = None
@@ -80,7 +111,7 @@ class Transcriber:
         if device == 'cuda' and not qwen:
             prepare_cuda(self.settings)
         if qwen:
-            compute = 'float16' if device == 'cuda' else 'float32'
+            compute = 'float16' if device in ('cuda', 'xpu') else 'float32'
         else:
             compute = self.settings.get('computeType', 'int8_float16') if device == 'cuda' else 'int8'
         options = dict(device=device, compute_type=compute,
@@ -91,6 +122,8 @@ class Transcriber:
                            merge_gap_seconds=self.settings.get('mergeGapSeconds', 1.0),
                            max_speech_seconds=self.settings.get('maxSpeechSeconds', 30.0))
         model = self.factory(self.settings['modelPath'], **options)
+        if qwen and callable(getattr(model, 'warmup', None)):
+            model.warmup()
         self.model, self.device, self.compute = model, device, compute
 
     def use_cpu(self, error):
@@ -106,7 +139,7 @@ class Transcriber:
             self.load('cpu')
         else:
             try:
-                self.load('cuda')
+                self.load('xpu' if self.preferred == 'xpu' else 'cuda')
                 self.fallback = ''
             except Exception as error:
                 if not self.settings.get('fallbackToCpu', True):
@@ -115,6 +148,7 @@ class Transcriber:
         self.report(status='ready')
 
     def recognize(self, audio):
+        audio = load_audio_file(audio, self.settings.get('ffmpegPath'))
         segments, info = self.model.transcribe(audio, language=self.settings.get('language', 'zh'),
             beam_size=1, best_of=1, condition_on_previous_text=False,
             vad_filter=True, vad_parameters={'min_silence_duration_ms': 500},
@@ -134,7 +168,7 @@ class Transcriber:
             try:
                 result = self.recognize(audio)
             except Exception as error:
-                if self.device != 'cuda' or not gpu_error(error) or not self.settings.get('fallbackToCpu', True):
+                if self.device not in ('cuda', 'xpu') or not gpu_error(error) or not self.settings.get('fallbackToCpu', True):
                     raise
                 self.use_cpu(error)
                 result = self.recognize(audio)
@@ -148,15 +182,9 @@ class Transcriber:
 
 
 def main():
-    if os.name == 'nt':
-        kernel = ctypes.WinDLL('kernel32', use_last_error=True)
-        kernel.GetCurrentProcess.restype = wintypes.HANDLE
-        kernel.SetPriorityClass.argtypes = [wintypes.HANDLE, wintypes.DWORD]
-        kernel.SetPriorityClass.restype = wintypes.BOOL
-        if not kernel.SetPriorityClass(kernel.GetCurrentProcess(), 0x4000):
-            raise OSError(ctypes.get_last_error(), 'Unable to set background priority')
     config = Path(sys.argv[1])
-    settings = json.loads(config.read_text(encoding='utf-8-sig'))['transcription']
+    values = json.loads(config.read_text(encoding='utf-8-sig'))
+    settings = {**values['transcription'], 'ffmpegPath': values.get('ffmpegPath')}
     state = config.parent / 'state/ambient-transcriber.json'
 
     def health(value):
@@ -175,6 +203,14 @@ def main():
         from faster_whisper import WhisperModel
         factory = WhisperModel
     worker = Transcriber(settings, factory, health)
+    # Load native libraries and the local model before lowering inference priority.
+    if os.name == 'nt':
+        kernel = ctypes.WinDLL('kernel32', use_last_error=True)
+        kernel.GetCurrentProcess.restype = wintypes.HANDLE
+        kernel.SetPriorityClass.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+        kernel.SetPriorityClass.restype = wintypes.BOOL
+        if not kernel.SetPriorityClass(kernel.GetCurrentProcess(), 0x4000):
+            raise OSError(ctypes.get_last_error(), 'Unable to set background priority')
     print(json.dumps({'ready': True, 'device': worker.device, 'computeType': worker.compute}), flush=True)
     for line in sys.stdin:
         request = {}

@@ -1,5 +1,14 @@
 # Release notes
 
+## v0.5.0 — 2026-10-28
+
+Compared with v0.4.0, this includes offline ambient transcription, verified text retention, compact local silence receipts, queue retry/fairness, loaded-model status, NVIDIA recovery, Qwen3-ASR-1.7B and upstream verified vocabulary/nearby-speech context. It also adds explicit experimental Intel XPU placement checks, pinned microphone input, optional timezone quiet hours and power monitoring, interrupted PCM preservation/recovery, and Windows state-file sharing-conflict retries.
+
+Empty rebuilds preserve existing daily documents. Runtime/model/configuration changes remain opt-in and device-local. Existing recordings, historical transcripts, private vocabulary, credentials and model weights are excluded from the source release. Android APK changes are outside this update.
+
+See [validation and upgrade boundaries](docs/release-0.5-validation.md) for the measured checks and outstanding acceptance steps. A successful Intel tensor operation does not establish Qwen inference throughput. Actual 09:00 resume, simultaneous meeting behavior and 24-hour stability remain separate validations.
+
+
 ## Unreleased — 2026-10-24
 
 - Added opt-in Windows microphone capture managed by the existing tray, with continuous segmentation, pause/resume, input recovery and low-disk protection.

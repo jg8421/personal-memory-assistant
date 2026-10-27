@@ -65,13 +65,13 @@ test('failure to persist a local silence receipt preserves the audio',async()=>{
  }finally{fs.rmSync(f.home,{recursive:true,force:true});}
 });
 
-test('daily rebuild removes old silent placeholders while preserving all spoken records',()=>{
+test('daily rebuild preserves existing text until spoken records can rebuild it',()=>{
  const f=fixture();try{
  const options=f.config.transcription;const day='2026-10-24';const folder=path.join(options.outputDir,day);
  fs.mkdirSync(folder,{recursive:true});
  fs.writeFileSync(path.join(folder,'12-00-00-old.json'),JSON.stringify({startedAt:'12:00:00',durationSeconds:60,segments:[]}));
  const daily=path.join(options.outputDir,day+'.txt');fs.writeFileSync(daily,'old silent placeholders');
- assert.equal(rebuildDailyTranscript(options,day),null);assert.equal(fs.existsSync(daily),false);
+ assert.equal(rebuildDailyTranscript(options,day),null);assert.equal(fs.readFileSync(daily,'utf8'),'old silent placeholders');
  assert.ok(fs.existsSync(path.join(folder,'12-00-00-old.json')));
  saveTranscript(f.input,{ok:true,duration:60,segments:[{start:0,end:2,text:'完整保留'}]},options);
  const text=fs.readFileSync(daily,'utf8');assert.ok(text.includes('完整保留'));assert.ok(!text.includes('12:00:00'));

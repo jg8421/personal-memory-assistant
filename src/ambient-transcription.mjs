@@ -3,6 +3,23 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import {spawn} from 'node:child_process';
 
+export function terminateOwnedTranscriber(child, launch=spawn, timeoutMs=60000) {
+  if(!child?.pid)return Promise.resolve();
+  if(process.platform!=='win32'){child.kill();return Promise.resolve();}
+  return new Promise((resolve,reject)=>{
+    const killer=launch('taskkill.exe',['/PID',String(child.pid),'/T','/F'],{windowsHide:true,stdio:'ignore'});
+    const timer=setTimeout(()=>{killer.kill();const error=new Error('Owned transcription tree stop timed out');error.code='ASR_STOP_TIMEOUT';reject(error);},timeoutMs);
+    killer.once('error',error=>{clearTimeout(timer);reject(error);});
+    killer.once('close',code=>{
+      clearTimeout(timer);
+      if(code===0)return resolve();
+      try{process.kill(child.pid,0);}catch(error){if(error.code==='ESRCH')return resolve();return reject(error);}
+      reject(new Error('Owned transcription process remains active after stop'));
+    });
+  });
+}
+
+
 function atomicText(file, text) {
   if(fs.existsSync(file) && fs.readFileSync(file,'utf8')===text) return;
   fs.mkdirSync(path.dirname(file),{recursive:true});
@@ -37,7 +54,7 @@ export function rebuildDailyTranscript(options, day) {
     .filter(item=>item.segments.length);
   const daily=path.join(options.outputDir,`${day}.txt`);
   if(!speech.length) {
-    if(fs.existsSync(daily))fs.unlinkSync(daily);
+    // A rebuild without speech does not authorize deleting an existing document.
     return null;
   }
   const lines=[`${day} 环境语音转写`,'本地自动识别，可能有错字、漏字；不代表人工确认。',''];
@@ -105,15 +122,25 @@ export class AmbientTranscription {
   }
   fail(error) {if(this.pending){const p=this.pending;this.pending=null;clearTimeout(p.timeout);p.reject(error);}}
   async transcribe(input) {
+    if(this.stopping)await this.stopping;
+    if(this.stopFailure)throw this.stopFailure;
     if(this.pending) throw new Error('转写正在进行');
     this.start();
     const result=await new Promise((resolve,reject)=>{
       const id=crypto.randomUUID();
-      const timeout=setTimeout(()=>{this.fail(new Error('本地转写超时，音频保留重试'));this.child?.kill();},900000);
+      const timeout=setTimeout(()=>{this.fail(new Error('本地转写超时，音频保留重试'));void this.stop().catch(error=>{this.stopFailure=error;});},900000);
       this.pending={id,timeout,resolve,reject};
       this.child.stdin.write(JSON.stringify({id,path:input})+'\n');
     });
     return saveTranscript(input,result,this.options);
   }
-  stop() {this.fail(new Error('转写暂停，音频保留'));this.child?.kill();this.child=null;}
+  async stop() {
+    if(this.stopping)return this.stopping;
+    const error=new Error('Transcription paused; closed input retained');error.code='ASR_PAUSED';
+    this.fail(error);const child=this.child;
+    if(!child?.pid)return;
+    this.stopping=(this.stopTree || terminateOwnedTranscriber)(child);
+    try{await this.stopping;if(this.child===child)this.child=null;this.stopFailure=null;}
+    finally{this.stopping=null;}
+  }
 }

@@ -3,6 +3,7 @@ from types import SimpleNamespace
 from pathlib import Path
 import json
 import hashlib
+import time
 
 
 def merge_speech_spans(spans, sample_rate=16000, max_gap_seconds=1.0, max_duration_seconds=30.0):
@@ -38,13 +39,45 @@ class QwenAmbientModel:
         self.merge_gap_seconds = max(0, min(2, float(merge_gap_seconds)))
         self.max_speech_seconds = max(5, min(60, float(max_speech_seconds)))
         self.recognition_context()
+        if device not in ('cpu', 'cuda', 'xpu'):
+            raise ValueError('Qwen device must be cpu, cuda or xpu')
         if device == 'cuda' and not torch.cuda.is_available():
             raise RuntimeError('CUDA is not available in the Qwen Python runtime')
+        if device == 'xpu' and (not hasattr(torch, 'xpu') or not torch.xpu.is_available()):
+            raise RuntimeError('Intel XPU is not available in the Qwen Python runtime')
+        accelerated = device in ('cuda', 'xpu')
         self.model = Qwen3ASRModel.from_pretrained(
-            model_path, dtype=torch.float16 if device == 'cuda' else torch.float32,
-            device_map='cuda:0' if device == 'cuda' else 'cpu',
+            model_path, dtype=torch.float16 if accelerated else torch.float32,
+            device_map=device + ':0' if accelerated else 'cpu',
             attn_implementation='sdpa', local_files_only=True,
             max_inference_batch_size=1, max_new_tokens=max_new_tokens)
+        if accelerated:
+            raw = getattr(self.model, 'model', None)
+            if raw is None or not hasattr(raw, 'parameters'):
+                raise RuntimeError('Cannot verify the loaded Qwen model device')
+            actual = {parameter.device.type for parameter in raw.parameters()}
+            if actual != {device}:
+                raise RuntimeError('Qwen model placement differs from requested device: ' + repr(actual))
+        self.actual_device = device
+
+    def warmup(self):
+        """Initialize lazy audio/native paths before background inference begins.
+
+        This is synthetic silence, never a transcript or recognition acceptance
+        sample. It uses the packaged local VAD asset and the already loaded model.
+        """
+        import numpy as np
+        from faster_whisper.vad import get_speech_timestamps, VadOptions
+        started=time.perf_counter()
+        silence=np.zeros(16000,dtype=np.float32)
+        get_speech_timestamps(silence,VadOptions(min_silence_duration_ms=500))
+        limit=getattr(self.model,'max_new_tokens',None)
+        if limit is not None:self.model.max_new_tokens=min(limit,8)
+        try:
+            self.model.transcribe(audio=[(silence,16000)],context='',language='Chinese',return_time_stamps=False)
+        finally:
+            if limit is not None:self.model.max_new_tokens=limit
+        self.warmup_seconds=time.perf_counter()-started
 
     def recognition_context(self):
         base = getattr(self, 'context', '')

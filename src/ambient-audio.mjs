@@ -3,9 +3,33 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
 import { AmbientTranscription } from './ambient-transcription.mjs';
+import { audioPower } from './capture-power.mjs';
+import { ensureClosedPcmWav } from './audio-recovery.mjs';
 
 export function localDay(date = new Date()) {
   return `${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,'0')}-${String(date.getDate()).padStart(2,'0')}`;
+}
+
+export function inQuietHours(config, date = new Date()) {
+  const rule = config.quietHours;
+  if (!rule?.enabled) return false;
+  const minutes = value => {
+    if (!/^\d{2}:\d{2}$/.test(value || '')) throw new Error('停录时间格式无效');
+    const [h,m] = value.split(':').map(Number);
+    if (h > 23 || m > 59) throw new Error('停录时间无效');
+    return h*60+m;
+  };
+  const start=minutes(rule.start), end=minutes(rule.end);
+  const parts=new Intl.DateTimeFormat('en-GB',{timeZone:rule.timeZone || 'Asia/Shanghai',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).formatToParts(date);
+  const current=Number(parts.find(p=>p.type==='hour').value)*60+Number(parts.find(p=>p.type==='minute').value);
+  return start===end || (start<end ? current>=start && current<end : current>=start || current<end);
+}
+
+export function selectAudioInput(config, devices) {
+  if(config.deviceId) return {device:config.device || 'Pinned microphone',input:config.deviceId};
+  if(devices.includes(config.device))return {device:config.device,input:config.device};
+  if(config.allowDeviceFallback===true && devices.length)return {device:devices[0],input:devices[0]};
+  throw new Error('Configured microphone is unavailable; automatic fallback is disabled');
 }
 
 export function audioArgs(config, outputPattern, manifest) {
@@ -22,7 +46,15 @@ export function audioArgs(config, outputPattern, manifest) {
 export function atomicJson(file, value) {
   const temp = `${file}.${process.pid}.tmp`;
   fs.writeFileSync(temp, JSON.stringify(value, null, 2)+'\n', 'utf8');
-  fs.renameSync(temp, file);
+  // Windows readers may briefly hold a handle without FILE_SHARE_DELETE.
+  // Retry the same atomic rename only; never change ACLs or use a partial write.
+  for (let attempt=0;;attempt++) {
+    try { fs.renameSync(temp, file); break; }
+    catch(error) {
+      if(process.platform!=='win32' || !['EPERM','EBUSY'].includes(error.code) || attempt>=9) throw error;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,50);
+    }
+  }
 }
 
 export function freeSpace(directory) {
@@ -31,8 +63,8 @@ export function freeSpace(directory) {
 }
 
 export class AmbientAudio {
-  constructor(home, {ownerAlive = () => true} = {}) {
-    this.home = home; this.ownerAlive = ownerAlive;
+  constructor(home, {ownerAlive = () => true, now = () => new Date()} = {}) {
+    this.home = home; this.ownerAlive = ownerAlive; this.now=now;
     this.configPath = path.join(home, 'ambient-audio.config.json');
     this.statePath = path.join(home, 'state', 'ambient-audio.json');
     this.pausePath = path.join(home, 'state', 'ambient-audio.paused');
@@ -62,6 +94,7 @@ export class AmbientAudio {
     let previous;
     try {previous=JSON.parse(fs.readFileSync(this.statePath,'utf8'));} catch {return;}
     if (!previous.recorderPid || !previous.supervisorPid) return;
+    try {process.kill(previous.recorderPid,0);} catch(error) {if(error.code==='ESRCH')return;throw error;}
     // Only a receipt-backed child of the previous supervisor with our exact output path can be stopped.
     const script = '$p=Get-CimInstance Win32_Process -Filter ("ProcessId="+[int]$env:PM_AUDIO_OLD_PID); '+
       'if($p -and $p.ParentProcessId -eq [int]$env:PM_AUDIO_OLD_OWNER -and '+
@@ -126,9 +159,11 @@ export class AmbientAudio {
         try {
           if(!this.transcriber)this.transcriber=new AmbientTranscription(this.home,this.config.transcription);
           this.write({transcriptionStatus:'transcribing',transcribingFile:file});
+          if(this.config.recoverInterruptedPcmWav===true)ensureClosedPcmWav(file,this.home);
+          const verifiedBefore=fs.statSync(file);
           const saved=await this.transcriber.transcribe(file);
           const after=fs.statSync(file);
-          if(before.size!==after.size||before.mtimeMs!==after.mtimeMs)throw new Error('音频仍在变化，暂不删除');
+          if(verifiedBefore.size!==after.size||verifiedBefore.mtimeMs!==after.mtimeMs)throw new Error('音频仍在变化，暂不删除');
           fs.unlinkSync(file);
           this.transcriptionFailures.delete(file);
           atomicJson(this.transcriptionRetryPath,{version:1,files:Object.fromEntries(this.transcriptionFailures)});
@@ -171,19 +206,19 @@ export class AmbientAudio {
   }
   launch() {
     this.prepareDays();
-    const devices = this.devices();
-    if (!devices.length) throw new Error('没有可用麦克风，等待重新连接');
+    const selected = selectAudioInput(this.config, this.config.deviceId ? [] : this.devices());
+    this.device = selected.device;
+    const inputDevice = selected.input;
     const preferred = this.config.device;
-    this.device = devices.includes(preferred) ? preferred : devices[0];
     this.session = crypto.randomBytes(4).toString('hex');
     const pattern = path.join(this.config.outputDir, '%Y-%m-%d', `%H-%M-%S-${this.session}.capture.wav`);
     const manifest = path.join(this.home, 'state', 'ambient-audio-segments.csv');
     this.buffer = ''; this.stderr = ''; this.lastProgress = Date.now(); this.lastOut = -1;
-    const child = spawn(this.config.ffmpegPath, audioArgs({...this.config, device:this.device}, pattern, manifest),
+    const child = spawn(this.config.ffmpegPath, audioArgs({...this.config, device:inputDevice}, pattern, manifest),
       {windowsHide:true, stdio:['pipe','pipe','pipe']});
     this.child = child;
     child.stdin.on('error', ()=>{});
-    this.write({status:'starting', recorderPid:child.pid, device:this.device,
+    this.write({status:'starting', recorderPid:child.pid, device:this.device, deviceId:this.config.deviceId || null,
       warning:this.device !== preferred ? '首选麦克风不可用，已切换到可用输入' : '',
       outputDir:this.config.outputDir, segmentSeconds:this.config.segmentSeconds || 600,
       session:this.session, lastError:'', currentFile:'', currentBytes:0});
@@ -235,8 +270,10 @@ export class AmbientAudio {
       if (!this.ownerAlive()) { await this.stop(); return; }
       this.config = JSON.parse(fs.readFileSync(this.configPath,'utf8'));
       if (!this.orphanChecked) {this.recoverOrphan(); this.orphanChecked=true;}
-      const paused = this.config.enabled !== true || fs.existsSync(this.pausePath);
-      if (paused) { await this.stopRecorder('paused'); this.write({status:'paused'}); return; }
+      const policy=this.config.powerPolicy?.enabled ? audioPower(this.home) : {paused:false};
+      const quiet=inQuietHours(this.config,this.now());
+      const paused = this.config.enabled !== true || fs.existsSync(this.pausePath) || policy.paused || quiet;
+      if (paused) { const reason=quiet?'scheduled-paused':policy.paused?'power-paused':'paused'; await this.stopRecorder(reason);this.write({status:reason,powerReason:policy.reason});return; }
       fs.mkdirSync(this.config.outputDir, {recursive:true});
       const bytes = freeSpace(this.config.outputDir);
       if (bytes < (Number(this.config.minFreeBytes) || 10*1024**3)) {
@@ -267,7 +304,7 @@ export class AmbientAudio {
   async stop() {
     if (this.closed) return;
     this.closed = true; clearInterval(this.timer);
-    this.transcriber?.stop();
-    await this.stopRecorder('stopped'); this.write({status:'stopped', recorderPid:null});
+    await this.stopRecorder('stopped');
+    await this.transcriber?.stop(); this.write({status:'stopped', recorderPid:null});
   }
 }

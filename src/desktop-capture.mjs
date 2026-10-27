@@ -1,3 +1,4 @@
+import { capturePower } from './capture-power.mjs';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 import fs from 'node:fs';
@@ -9,7 +10,7 @@ export class DesktopCapture {
     this.seen = new Map(); this.buffer = ''; this.lastStateWrite = 0;
   }
   launch() {
-    if (this.stopped || this.child || this.options.enabled !== true || process.platform !== 'win32') return;
+    if ((this.options.powerPolicy?.enabled && capturePower(this.home).paused) || this.stopped || this.child || this.options.enabled !== true || process.platform !== 'win32') return;
     const executable = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
     this.lastPulse = Date.now(); this.buffer = '';
     const child = spawn(executable, ['-NoProfile', '-NonInteractive', '-Mta', '-ExecutionPolicy', 'Bypass', '-File',
@@ -24,6 +25,7 @@ export class DesktopCapture {
         const line = this.buffer.slice(0, index); this.buffer = this.buffer.slice(index + 1);
         try {
           const item = JSON.parse(line); this.lastPulse = Date.now();
+          if(this.options.powerPolicy?.enabled && capturePower(this.home).paused)continue;
           if (this.lastPulse - this.lastStateWrite > 15000 || !item.heartbeat) {
             this.lastStateWrite = this.lastPulse;
             fs.writeFileSync(path.join(this.home, 'state', 'desktop-capture.json'), JSON.stringify({
@@ -49,6 +51,7 @@ export class DesktopCapture {
   start() {
     this.launch();
     this.timer = setInterval(() => {
+      if(this.options.powerPolicy?.enabled && capturePower(this.home).paused){this.child?.kill();return;}
       if (this.child && Date.now() - this.lastPulse > 60000) this.child.kill();
       else this.launch();
     }, 10000); this.timer.unref();

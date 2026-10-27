@@ -1,6 +1,6 @@
 {
   "name": "personal-memory-hub",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "private": true,
   "type": "module",
   "description": "Local-first personal memory store, Android sync API, and MCP server.",
