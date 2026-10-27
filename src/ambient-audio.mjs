@@ -38,6 +38,8 @@ export class AmbientAudio {
     this.pausePath = path.join(home, 'state', 'ambient-audio.paused');
     this.child = null; this.nextStart = 0; this.closed = false; this.lastProgress = 0;
     this.failures = 0; this.timer = null; this.buffer = ''; this.stderr = '';
+    this.transcriptionFailures = null;
+    this.transcriptionRetryPath = path.join(home, 'state', 'ambient-transcription-retries.json');
     this.state = { supervisorPid: process.pid, status: 'starting', startedAt: new Date().toISOString() };
   }
   write(extra = {}) {
@@ -98,26 +100,56 @@ export class AmbientAudio {
         if((name.endsWith('.capture.wav') || (this.config.transcription?.enabled && name.endsWith('.flac'))) && file !== activeFile) pending.push(file);
       }
     }
+    pending.sort();
     this.write({pendingAudioFiles:pending.length});
-    for(const file of pending.slice(0,this.config.transcription?.enabled ? 1 : 4)) {
+    if(this.config.transcription?.enabled && !this.transcriptionFailures) {
+      let saved={files:{}};
+      try {saved=JSON.parse(fs.readFileSync(this.transcriptionRetryPath,'utf8'));}
+      catch(error) {if(error.code!=='ENOENT')throw new Error('无法读取逐段转写重试状态，音频保留');}
+      if(!saved.files || typeof saved.files!=='object')throw new Error('逐段转写重试状态无效，音频保留');
+      this.transcriptionFailures=new Map(Object.entries(saved.files));
+      for(const file of this.transcriptionFailures.keys()) if(!fs.existsSync(file))this.transcriptionFailures.delete(file);
+    }
+    const recent=this.config.transcription?.enabled && pending.length>8 &&
+      Date.now()-(this.lastRecentTranscriptionAt||0)>=60000 ? pending.at(-1) : '';
+    const candidates=recent ? [recent,...pending.slice(0,-1)] : pending;
+    let attempts=0;
+    for(const file of candidates) {
+      if(attempts>=4)break;
       if(this.config.transcription?.enabled) {
-        if(Date.now()<(this.transcriptionRetryAt||0)) return;
+        const before=fs.statSync(file);
+        const previous=this.transcriptionFailures.get(file);
+        const unchanged=previous && previous.size===before.size && previous.mtimeMs===before.mtimeMs;
+        if(unchanged && Date.now()<previous.retryAt)continue;
+        attempts++;
+        if(file===recent)this.lastRecentTranscriptionAt=Date.now();
         try {
           if(!this.transcriber)this.transcriber=new AmbientTranscription(this.home,this.config.transcription);
-          const before=fs.statSync(file);
           this.write({transcriptionStatus:'transcribing',transcribingFile:file});
           const saved=await this.transcriber.transcribe(file);
           const after=fs.statSync(file);
           if(before.size!==after.size||before.mtimeMs!==after.mtimeMs)throw new Error('音频仍在变化，暂不删除');
           fs.unlinkSync(file);
+          this.transcriptionFailures.delete(file);
+          atomicJson(this.transcriptionRetryPath,{version:1,files:Object.fromEntries(this.transcriptionFailures)});
           this.write({transcriptionStatus:'ready',lastTranscript:saved.daily,lastTranscribedAt:new Date().toISOString(),
-            transcriptionError:'',transcribingFile:'',audioRetention:'delete-after-transcript',pendingAudioFiles:pending.length-1});
+            transcriptionError:'',transcribingFile:'',audioRetention:'delete-after-transcript',
+            deferredTranscriptionFiles:this.transcriptionFailures.size,
+            transcriptionWarning:this.transcriptionFailures.size ? '部分片段失败暂存，后续片段继续转写' : '',
+            pendingAudioFiles:pending.filter(p=>fs.existsSync(p)).length});
         } catch(error) {
-          this.transcriptionRetryAt=Date.now()+60000;
-          this.write({transcriptionStatus:'error',transcriptionError:String(error.message)});
+          if(this.closed)return;
+          const count=unchanged ? (Number(previous.attempts)||0)+1 : 1;
+          this.transcriptionFailures.set(file,{size:before.size,mtimeMs:before.mtimeMs,attempts:count,
+            retryAt:Date.now()+Math.min(3600000,60000*2**Math.min(count-1,6)),error:String(error.message).slice(0,1000)});
+          atomicJson(this.transcriptionRetryPath,{version:1,files:Object.fromEntries(this.transcriptionFailures)});
+          this.write({transcriptionStatus:'error',transcriptionError:String(error.message),transcribingFile:'',
+            deferredTranscriptionFiles:this.transcriptionFailures.size,
+            transcriptionWarning:'失败片段已保留并单独退避，后续片段继续转写'});
         }
         continue;
       }
+      attempts++;
       const final=file.replace(/\.capture\.wav$/,'.flac');
       const temp=`${final}.${process.pid}.tmp`;
       try {
