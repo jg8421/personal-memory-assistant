@@ -84,6 +84,18 @@ class RecoveryTests(unittest.TestCase):
         self.assertEqual(states[-1]['modelPath'], 'local-model')
         self.assertEqual(engine.device, 'cuda')
 
+    def test_qwen_uses_torch_precision_without_whisper_cuda_preload(self):
+        options = []
+        def factory(path, **kwargs):
+            options.append(kwargs)
+            return Model()
+        engine = worker.Transcriber({**self.settings, 'backend': 'qwen3-asr'}, factory)
+        self.assertEqual(engine.transcribe('audio')['computeType'], 'float16')
+        worker.prepare_cuda.assert_not_called()
+        engine.use_cpu(RuntimeError('CUDA out of memory'))
+        self.assertEqual(engine.compute, 'float32')
+        self.assertEqual([x['compute_type'] for x in options], ['float16', 'float32'])
+
 
 if __name__ == '__main__':
     unittest.main()

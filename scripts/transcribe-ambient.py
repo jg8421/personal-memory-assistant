@@ -50,6 +50,8 @@ class Transcriber:
         self.health = health or (lambda value: None)
         self.clock = clock
         self.preferred = settings.get('device', 'cpu')
+        if settings.get('backend', 'faster-whisper') not in ('faster-whisper', 'qwen3-asr'):
+            raise ValueError('Unknown offline transcription backend')
         if self.preferred not in ('cpu', 'cuda', 'auto'):
             raise ValueError('transcription.device must be cpu, cuda or auto')
         self.model = None
@@ -64,14 +66,19 @@ class Transcriber:
         value = {'pid': os.getpid(), 'checkedAt': datetime.now(timezone.utc).isoformat(),
                  'requestedDevice': self.preferred, 'device': self.device,
                  'modelPath': self.settings['modelPath'],
+                 'backend': self.settings.get('backend', 'faster-whisper'),
                  'computeType': self.compute, 'gpuFallbackReason': self.fallback}
         value.update(extra)
         self.health(value)
 
     def load(self, device):
-        if device == 'cuda':
+        qwen = self.settings.get('backend') == 'qwen3-asr'
+        if device == 'cuda' and not qwen:
             prepare_cuda(self.settings)
-        compute = self.settings.get('computeType', 'int8_float16') if device == 'cuda' else 'int8'
+        if qwen:
+            compute = 'float16' if device == 'cuda' else 'float32'
+        else:
+            compute = self.settings.get('computeType', 'int8_float16') if device == 'cuda' else 'int8'
         model = self.factory(self.settings['modelPath'], device=device, compute_type=compute,
                              cpu_threads=int(self.settings.get('cpuThreads', 2)),
                              num_workers=1, local_files_only=True)
@@ -149,8 +156,16 @@ def main():
         temp.write_text(json.dumps(value, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
         os.replace(temp, state)
 
-    from faster_whisper import WhisperModel
-    worker = Transcriber(settings, WhisperModel, health)
+    if settings.get('backend', 'faster-whisper') == 'qwen3-asr':
+        import importlib.util
+        spec = importlib.util.spec_from_file_location('qwen_ambient', Path(__file__).with_name('qwen-ambient.py'))
+        adapter = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(adapter)
+        factory = adapter.QwenAmbientModel
+    else:
+        from faster_whisper import WhisperModel
+        factory = WhisperModel
+    worker = Transcriber(settings, factory, health)
     print(json.dumps({'ready': True, 'device': worker.device, 'computeType': worker.compute}), flush=True)
     for line in sys.stdin:
         request = {}

@@ -45,3 +45,13 @@ GPU初始化失败或可捕获的CUDA推理错误会回退CPU INT8，并对当�
 切换前应对同一段有效语音进行CPU/GPU对比，再确认真实GPU进程、新转写落盘和录音连续性；短测不能替代24小时稳定性或准确率评测。GPU速度优势不保证逐字输出与CPU完全相同。
 
 更换已下载的兼容模型（例如faster-whisper large-v3）时，将 `modelPath` 指向包含 `model.bin`、配置和分词器的本地目录，再重载转写进程。先验证真实语音推理及显存余量，不能仅以目录存在判断下载完整。运行状态同时报告实际加载的 `modelPath`，避免将刚修改的配置误认为已经生效；模型变更不会补转此前已删除原音频的历史文字。
+
+## 可选：Qwen3-ASR-1.7B本地后端
+
+使用独立Python环境安装 `requirements-audio-qwen.txt`，另安装与本机显卡/驱动兼容的CUDA版PyTorch。普通PyPI上的Windows PyTorch可能是CPU版；必须实测 `torch.cuda.is_available()`。中国大陆可从ModelScope获取模型、清华PyPI镜像获取依赖、上海交大PyTorch镜像获取CUDA构建。下载进程清除HTTP/HTTPS/ALL代理并设置 `NO_PROXY=*`，确认最终下载域名及连接为直连；不要将代理设置写入模型配置或全局覆盖其他应用。
+
+在 `transcription` 设置 `backend: "qwen3-asr"`、对应 `pythonPath`、包含全部分片和分词器的本地 `modelPath`、`device: "cuda"`。GPU实际使用FP16，CPU回退使用FP32；运行状态记录后端、实际模型和计算设备。旧配置未设置backend时仍使用faster-whisper。
+
+Qwen输入先使用既有本地VAD分出语音区间，再以中文等指定语种识别；无语音不调用大模型，继续服从空片段不写同步文档的规则。输出时间戳为VAD语音区间，不是逐字强制对齐。单次推理批量为1以限制显存；大模型CPU回退可能赶不上连续音频，必须关注积压，不能只凭加载成功宣布实时可用。
+
+跨设备分发使用模型目录与SHA256清单，目标设备下载完整后复制到本机模型目录；按真实硬件选CUDA或CPU，测试语音、静音、吞吐、录音连续性和生成文件，再切换默认配置。保持原配置和模型以便回退，个人转写、真实配置和运行库不要提交公共源码仓库。
