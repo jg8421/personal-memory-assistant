@@ -203,14 +203,21 @@ def main():
         from faster_whisper import WhisperModel
         factory = WhisperModel
     worker = Transcriber(settings, factory, health)
+    if settings.get('backend', 'faster-whisper') != 'qwen3-asr':
+        # Initialize the bundled offline VAD before background scheduling.
+        # Synthetic warmup output is discarded, never saved as captured speech.
+        import numpy as np
+        from faster_whisper.vad import get_speech_timestamps
+        get_speech_timestamps(np.zeros(16000, dtype=np.float32), min_silence_duration_ms=500)
     # Load native libraries and the local model before lowering inference priority.
     if os.name == 'nt':
         kernel = ctypes.WinDLL('kernel32', use_last_error=True)
         kernel.GetCurrentProcess.restype = wintypes.HANDLE
         kernel.SetPriorityClass.argtypes = [wintypes.HANDLE, wintypes.DWORD]
         kernel.SetPriorityClass.restype = wintypes.BOOL
-        if not kernel.SetPriorityClass(kernel.GetCurrentProcess(), 0x4000):
-            raise OSError(ctypes.get_last_error(), 'Unable to set background priority')
+        priority = 0x20 if settings.get('inferencePriority') == 'normal' else 0x4000
+        if not kernel.SetPriorityClass(kernel.GetCurrentProcess(), priority):
+            raise OSError(ctypes.get_last_error(), 'Unable to set inference priority')
     print(json.dumps({'ready': True, 'device': worker.device, 'computeType': worker.compute}), flush=True)
     for line in sys.stdin:
         request = {}

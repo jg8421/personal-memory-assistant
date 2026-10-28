@@ -1,5 +1,7 @@
 ﻿param([string]$InstallRoot="$env:LOCALAPPDATA\PersonalMemory",[switch]$ReadOnce)
 $ErrorActionPreference='Stop'
+# Keep the safety heartbeat responsive; do not alter any system power policy.
+[Diagnostics.Process]::GetCurrentProcess().PriorityClass = [Diagnostics.ProcessPriorityClass]::Normal
 $mutex=$null
 if(-not $ReadOnce){$new=$false;$mutex=[Threading.Mutex]::new($true,'Local\PersonalMemoryCapturePowerPolicy',[ref]$new);if(-not $new){$mutex.Dispose();exit 0}}
 Add-Type -AssemblyName System.Windows.Forms

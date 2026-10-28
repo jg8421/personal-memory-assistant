@@ -3,6 +3,12 @@
 Comparison baseline: **v0.4.0**, commit `546fcf70d9593db5d2fafbc757c83441f649ff17`.
 Upstream Qwen context changes through `fdc57d1` are preserved.
 
+Follow-up: [measured Windows morning-recovery correction](../docs/windows-morning-recovery-validation.md)
+records the initial failed unattended start, scheduling/state-sharing fixes,
+isolated small-model throughput and repetition limits. The original 09:00 start
+did not pass naturally; local recovery does not establish cloud delivery or
+recognition accuracy.
+
 ## Changes since the previous formal release
 
 - Opt-in hidden Windows microphone supervision, continuous segmentation,
@@ -39,7 +45,7 @@ Upstream Qwen context changes through `fdc57d1` are preserved.
 
 ## Validation and limitations
 
-- Automated regression: **33 Node tests and 21 Python tests passed**.
+- Automated regression: **34 Node tests and 21 Python tests passed**.
 - Intel Arc B390: actual XPU operations and model placement passed. With eval,
   inference mode, FP16 and the full 1024-token cap, one real 60-second input took
   **173.923 seconds**, returning three nonempty segments/52 characters. This fails

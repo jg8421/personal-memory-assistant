@@ -1,5 +1,12 @@
 # Release notes
 
+## Windows morning-recovery correction — 2026-10-28
+
+- Keep capture initialization and the power heartbeat responsive under inherited background scheduling; allow an explicit device-local normal inference priority while retaining the two-thread CPU bound.
+- Initialize bundled offline VAD before inference scheduling. Defer prolonged Windows state snapshot sharing conflicts without terminating live capture, changing permissions, or replacing a partial snapshot.
+- Record the initially failed 09:00 recovery and subsequent repair honestly. Two existing-speech small-model tests produced nonempty isolated documents but were slower than real time, and one showed substantial repetition. Cloud arrival, transcript accuracy, another morning boundary and 24-hour stability remain unverified.
+- See [measured recovery and remaining limits](docs/windows-morning-recovery-validation.md). Regression checks: 34 Node and 21 Python tests passed. Historical data and the existing production model remain preserved.
+
 ## v0.5.0 — 2026-10-28
 
 Compared with v0.4.0, this includes offline ambient transcription, verified text retention, compact local silence receipts, queue retry/fairness, loaded-model status, NVIDIA recovery, Qwen3-ASR-1.7B and upstream verified vocabulary/nearby-speech context. It also adds explicit experimental Intel XPU placement checks, pinned microphone input, optional timezone quiet hours and power monitoring, interrupted PCM preservation/recovery, and Windows state-file sharing-conflict retries.

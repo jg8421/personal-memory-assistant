@@ -76,7 +76,21 @@ export class AmbientAudio {
   }
   write(extra = {}) {
     Object.assign(this.state, extra, {checkedAt: new Date().toISOString()});
-    atomicJson(this.statePath, this.state);
+    try {
+      atomicJson(this.statePath, this.state);
+      this.stateWriteDeferred = false;
+    } catch (error) {
+      // A reader can hold the destination without FILE_SHARE_DELETE longer than
+      // the bounded retry. Keep the previous atomic snapshot and retry the latest
+      // in-memory state on the next progress/tick; do not crash live capture.
+      // Other errors, including explicit access denial, remain visible failures.
+      if (process.platform !== 'win32' || !['EPERM', 'EBUSY'].includes(error.code)) throw error;
+      if (!this.stateWriteDeferred) {
+        try { fs.appendFileSync(path.join(this.home, 'state', 'audio-supervisor-errors.log'),
+          new Date().toISOString() + ' State snapshot replacement deferred: ' + error.code + '\n'); } catch {}
+      }
+      this.stateWriteDeferred = true;
+    }
   }
   prepareDays() {
     for (let offset = 0; offset < 3; offset++) {

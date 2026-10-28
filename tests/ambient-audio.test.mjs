@@ -62,3 +62,24 @@ test('Windows sharing conflicts retry the same atomic operation without replacin
   assert.deepEqual(JSON.parse(fs.readFileSync(target,'utf8')),{new:true});
  }finally{fs.renameSync=rename;fs.rmSync(home,{recursive:true,force:true});}
 });
+
+test('a prolonged state sharing conflict preserves capture state and retries the latest snapshot',()=>{
+ if(process.platform!=='win32')return;
+ const home=fs.mkdtempSync(path.join(os.tmpdir(),'ambient-state-deferred-'));
+ const rename=fs.renameSync;
+ try {
+  fs.mkdirSync(path.join(home,'state'));
+  const audio=new AmbientAudio(home);
+  audio.write({status:'recording',currentBytes:10});
+  fs.renameSync=()=>{const error=new Error('reader still holds state');error.code='EPERM';throw error;};
+  assert.doesNotThrow(()=>audio.write({currentBytes:20}));
+  assert.equal(audio.closed,false);
+  assert.equal(audio.state.currentBytes,20);
+  assert.equal(JSON.parse(fs.readFileSync(audio.statePath,'utf8')).currentBytes,10);
+  fs.renameSync=rename;
+  audio.write({currentBytes:30});
+  assert.equal(JSON.parse(fs.readFileSync(audio.statePath,'utf8')).currentBytes,30);
+  fs.renameSync=()=>{const error=new Error('actual access denial');error.code='EACCES';throw error;};
+  assert.throws(()=>audio.write({currentBytes:40}),{code:'EACCES'});
+ } finally {fs.renameSync=rename;fs.rmSync(home,{recursive:true,force:true});}
+});

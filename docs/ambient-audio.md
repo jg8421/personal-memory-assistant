@@ -59,3 +59,19 @@ Qwen输入先使用既有本地VAD分出语音区间，再以中文等指定语�
 默认合并间隔不超过1秒且合并后不超过30秒的相邻VAD片段，减少过短句段失去上下文和重复推理；原本超过30秒的连续片段不硬切。可用 `mergeGapSeconds`（0—2秒）及 `maxSpeechSeconds`（5—60秒）调整。不会跨越长静音，也不读取或拼接上一段识别文字，避免把旧识别错误继续传播。状态报告词表条数和摘要哈希，不把词表正文写入运行状态。
 
 跨设备分发使用模型目录与SHA256清单，目标设备下载完整后复制到本机模型目录；按真实硬件选CUDA或CPU，测试语音、静音、吞吐、录音连续性和生成文件，再切换默认配置。保持原配置和模型以便回退，个人转写、真实配置和运行库不要提交公共源码仓库。
+# Windows initialization and scheduling
+
+The capture supervisor and its power-heartbeat helper initialize at normal
+process priority so inherited background scheduling does not delay native input
+startup or make a healthy power monitor appear stale. This does not change any
+Windows power policy. The existing conservative heartbeat timeout still applies.
+
+The offline faster-whisper worker initializes its bundled VAD before selecting
+inference priority. Its default remains below normal. On a device where measured
+background scheduling stalls inference, `transcription.inferencePriority` may be
+set to `"normal"`; the existing two-thread CPU bound remains in force. This is
+a device-local scheduling choice, not an Intel Qwen performance claim.
+
+A prolonged Windows state-file sharing conflict keeps the previous complete
+snapshot and retries the latest in-memory state on subsequent progress/ticks.
+Explicit access-denial errors still fail visibly; permissions are never changed.

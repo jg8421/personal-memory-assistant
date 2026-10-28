@@ -1,5 +1,6 @@
 import path from 'node:path';
 import fs from 'node:fs';
+import os from 'node:os';
 import net from 'node:net';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
@@ -7,6 +8,9 @@ import { AmbientAudio } from '../src/ambient-audio.mjs';
 
 const home = path.resolve(process.argv[2] || path.join(path.dirname(fileURLToPath(import.meta.url)), '..'));
 const owner = Number(process.argv[3] || 0);
+// Initialize capture and native ASR imports at normal scheduling priority.
+// The ASR worker lowers its own priority after local model initialization.
+if (process.platform === 'win32') os.setPriority(0, os.constants.priority.PRIORITY_NORMAL);
 fs.mkdirSync(path.join(home,'state'),{recursive:true});
 const name = crypto.createHash('sha256').update(home.toLowerCase()).digest('hex').slice(0,20);
 const pipe = process.platform === 'win32' ? `\\\\.\\pipe\\PersonalMemoryAudio-${name}` : path.join(home,'state','audio.sock');
