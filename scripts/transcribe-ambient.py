@@ -154,7 +154,11 @@ class Transcriber:
             vad_filter=True, vad_parameters={'min_silence_duration_ms': 500},
             no_speech_threshold=0.6, log_prob_threshold=-1.0,
             compression_ratio_threshold=2.4, word_timestamps=False)
-        result = [{'start': round(s.start, 3), 'end': round(s.end, 3), 'text': s.text.strip()}
+        result = [{'start': round(s.start, 3), 'end': round(s.end, 3), 'text': s.text.strip(),
+                   'avg_logprob': getattr(s, 'avg_logprob', None),
+                   'compression_ratio': getattr(s, 'compression_ratio', None),
+                   'no_speech_prob': getattr(s, 'no_speech_prob', None),
+                   'temperature': getattr(s, 'temperature', None)}
                   for s in segments if s.text.strip()]
         return {'ok': True, 'duration': info.duration, 'language': info.language,
                 'segments': result, 'device': self.device, 'computeType': self.compute}
@@ -223,7 +227,13 @@ def main():
         request = {}
         try:
             request = json.loads(line)
+            if settings.get('backend', 'faster-whisper') != 'qwen3-asr':
+                from asr_quality import reject_cached_review, require_review_if_repetitive
+                review_dir = config.parent / 'state/ambient-review'
+                reject_cached_review(request['path'], review_dir)
             result = worker.transcribe(request['path'])
+            if settings.get('backend', 'faster-whisper') != 'qwen3-asr':
+                require_review_if_repetitive(request['path'], result, review_dir)
             print(json.dumps({'id': request['id'], **result}, ensure_ascii=False), flush=True)
         except Exception as error:
             print(json.dumps({'id': request.get('id'), 'ok': False,

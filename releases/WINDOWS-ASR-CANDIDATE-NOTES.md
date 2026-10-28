@@ -3,6 +3,10 @@
 Comparison baseline: **v0.4.0**, commit `546fcf70d9593db5d2fafbc757c83441f649ff17`.
 Upstream Qwen context changes through `fdc57d1` are preserved.
 
+Quality follow-up: [small-model local review protection](../docs/windows-small-quality-review.md)
+withholds suspect new text, preserves its audio and documents the unsuccessful
+two/four-thread fallback comparison. Existing formal documents are unchanged.
+
 Follow-up: [measured Windows morning-recovery correction](../docs/windows-morning-recovery-validation.md)
 records the initial failed unattended start, scheduling/state-sharing fixes,
 isolated small-model throughput and repetition limits. The original 09:00 start

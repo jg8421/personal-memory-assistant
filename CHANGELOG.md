@@ -1,5 +1,11 @@
 # Release notes
 
+## Small-model local quality review — 2026-10-28
+
+- Hold obvious repeated output and candidates still violating existing decoder-quality thresholds for local manual review. Keep the original audio; do not automatically publish suspect text or treat it as silence. Memoize unchanged review inputs to avoid repeated inference.
+- Retain raw confidence metadata. Existing formal documents are unchanged. The two/four-thread fallback comparison remained too slow and repetitive, so the candidate was not promoted; the installed two-thread profile remains with the review gate.
+- See [measured comparison and review limits](docs/windows-small-quality-review.md). Regression checks: 34 Node and 25 Python tests passed. This is not recognition-accuracy or real-time acceptance.
+
 ## Windows morning-recovery correction — 2026-10-28
 
 - Keep capture initialization and the power heartbeat responsive under inherited background scheduling; allow an explicit device-local normal inference priority while retaining the two-thread CPU bound.
